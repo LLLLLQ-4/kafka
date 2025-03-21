@@ -638,6 +638,24 @@ public class MetricsTest {
     }
 
     @Test
+    public void testUseWithMinimumPossibleConfiguration() {
+        final SimpleRate rate = new SimpleRate();
+        MetricConfig config = new MetricConfig().timeWindow(1, TimeUnit.SECONDS).samples(1);
+        // MockTime elapsed = new MockTime();
+        // r.record(config, 1.0, elapsed.milliseconds());
+        record(rate, config, 1);
+        time.sleep(100);
+        // assertEquals(1 / 0.1, measure(rate, config), 0);  // 1 / 0.1s
+        assertEquals(1, measure(rate, config), 0);  // 1 / 0.1s
+        // r.record(config, 1.0, elapsed.milliseconds());
+        record(rate, config, 1);
+        // assertEquals(2 / 0.1, measure(rate, config), 0);
+        assertEquals(2, measure(rate, config), 0);
+        time.sleep(1000);
+        assertEquals((2 - 1) / (1.1 - 0.1), measure(rate, config), 0);  
+    } 
+
+    @Test
     public void testSimpleRate() {
         SimpleRate rate = new SimpleRate();
 
