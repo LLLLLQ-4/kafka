@@ -241,6 +241,105 @@ public class MirrorSourceTaskTest {
         mirrorSourceTask.commitRecord(sourceRecord, null);
         verifyNoInteractions(producer);
     }
+    
+    @Test
+    public void testSendSyncEventRegression() {
+        byte[] recordKey = "key".getBytes();
+        byte[] recordValue = "value".getBytes();
+        int maxOffsetLag = 50;
+        int recordPartition = 0;
+        int recordOffset = 0;
+        int metadataOffset = 100;
+        String topicName = "topic";
+        String sourceClusterName = "sourceCluster";
+        RecordHeaders headers = new RecordHeaders();
+        ReplicationPolicy replicationPolicy = new DefaultReplicationPolicy();
+        @SuppressWarnings("unchecked")
+        KafkaConsumer<byte[], byte[]> consumer = mock(KafkaConsumer.class);
+        @SuppressWarnings("unchecked")
+        KafkaProducer<byte[], byte[]> producer = mock(KafkaProducer.class);
+        MirrorSourceMetrics metrics = mock(MirrorSourceMetrics.class);
+        Semaphore outstandingOffsetSyncs = new Semaphore(1);
+        PartitionState partitionState = new PartitionState(maxOffsetLag);
+        Map<TopicPartition, PartitionState> partitionStates = new HashMap<>();
+        MirrorSourceTask mirrorSourceTask = new MirrorSourceTask(consumer, metrics, sourceClusterName,
+                replicationPolicy, maxOffsetLag, producer, outstandingOffsetSyncs, partitionStates, topicName);
+        SourceRecord sourceRecord = mirrorSourceTask.convertRecord(new ConsumerRecord<>(topicName, recordPartition,
+                recordOffset, System.currentTimeMillis(), TimestampType.CREATE_TIME, recordKey.length,
+                recordValue.length, recordKey, recordValue, headers, Optional.empty()));
+        TopicPartition sourceTopicPartition = MirrorUtils.unwrapPartition(sourceRecord.sourcePartition());
+        partitionStates.put(sourceTopicPartition, partitionState);
+        RecordMetadata recordMetadata = new RecordMetadata(sourceTopicPartition, metadataOffset, 0, 0, 0, recordPartition);
+        ArgumentCaptor<Callback> producerCallback = ArgumentCaptor.forClass(Callback.class);
+        when(producer.send(any(), producerCallback.capture())).thenAnswer(mockInvocation -> {
+            producerCallback.getValue().onCompletion(null, null);
+            return null;
+        });
+
+        mirrorSourceTask.commitRecord(sourceRecord, recordMetadata);
+        // We should have dispatched this sync to the producer
+        verify(producer, times(1)).send(any(), any());
+
+        mirrorSourceTask.commit();
+        // No more syncs should take place; we've been able to publish all of them so far
+        verify(producer, times(1)).send(any(), any());
+
+        recordOffset = 2;
+        metadataOffset = 102;
+        recordMetadata = new RecordMetadata(sourceTopicPartition, metadataOffset, 0, 0, 0, recordPartition);
+        sourceRecord = mirrorSourceTask.convertRecord(new ConsumerRecord<>(topicName, recordPartition,
+                recordOffset, System.currentTimeMillis(), TimestampType.CREATE_TIME, recordKey.length,
+                recordValue.length, recordKey, recordValue, headers, Optional.empty()));
+        // Do not release outstanding sync semaphore
+        doReturn(null).when(producer).send(any(), producerCallback.capture());
+
+        mirrorSourceTask.commitRecord(sourceRecord, recordMetadata);
+        // We should have dispatched this sync to the producer
+        verify(producer, times(2)).send(any(), any());
+
+        mirrorSourceTask.commit();
+        // No more syncs should take place; we've been able to publish all of them so far
+        verify(producer, times(2)).send(any(), any());
+
+        // Do not send sync event
+        recordOffset = 4;
+        metadataOffset = 104;
+        recordMetadata = new RecordMetadata(sourceTopicPartition, metadataOffset, 0, 0, 0, recordPartition);
+        sourceRecord = mirrorSourceTask.convertRecord(new ConsumerRecord<>(topicName, recordPartition,
+                recordOffset, System.currentTimeMillis(), TimestampType.CREATE_TIME, recordKey.length,
+                recordValue.length, recordKey, recordValue, headers, Optional.empty()));
+
+        mirrorSourceTask.commitRecord(sourceRecord, recordMetadata);
+        mirrorSourceTask.commit();
+
+        // We should not have dispatched any more syncs to the producer; there were too many already in flight
+        verify(producer, times(2)).send(any(), any());
+
+        // Now the in-flight sync has been ack'd
+        producerCallback.getValue().onCompletion(null, null);
+        mirrorSourceTask.commit();
+        // We should dispatch the offset sync that was queued but previously not sent to the producer now
+        verify(producer, times(3)).send(any(), any());
+
+        // Ack the latest sync immediately
+        producerCallback.getValue().onCompletion(null, null);
+
+        // Should send sync event
+        recordOffset = 6;
+        metadataOffset = 106;
+        recordMetadata = new RecordMetadata(sourceTopicPartition, metadataOffset, 0, 0, 0, recordPartition);
+        sourceRecord = mirrorSourceTask.convertRecord(new ConsumerRecord<>(topicName, recordPartition,
+                recordOffset, System.currentTimeMillis(), TimestampType.CREATE_TIME, recordKey.length,
+                recordValue.length, recordKey, recordValue, headers, Optional.empty()));
+
+        mirrorSourceTask.commitRecord(sourceRecord, recordMetadata);
+        // We should have dispatched this sync to the producer
+        verify(producer, times(4)).send(any(), any());
+
+        mirrorSourceTask.commit();
+        // No more syncs should take place; we've been able to publish all of them so far
+        verify(producer, times(4)).send(any(), any());
+    }
 
     @Test
     public void testSendSyncEvent() {
