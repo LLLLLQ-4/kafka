@@ -59,6 +59,8 @@ import scala.concurrent.ExecutionException
 import scala.concurrent.duration.{FiniteDuration, MILLISECONDS, SECONDS}
 import scala.jdk.CollectionConverters._
 
+import org.apache.kafka.controller.QuorumController
+
 @Timeout(120)
 @Tag("integration")
 class KRaftClusterTest {
@@ -1101,6 +1103,33 @@ class KRaftClusterTest {
           executionException.getCause.getMessage)
       } finally {
         admin.close()
+      }
+    } finally {
+      cluster.close()
+    }
+  }
+
+  @Test
+  def testTimedOutHeartbeats(): Unit = {
+    val cluster = new KafkaClusterTestKit.Builder(
+      new TestKitNodes.Builder().
+        setNumBrokerNodes(3).
+        setNumControllerNodes(1).build()).
+      setConfigProp(KafkaConfig.BrokerHeartbeatIntervalMsProp, 10.toString).
+      setConfigProp(KafkaConfig.BrokerSessionTimeoutMsProp, 1000.toString).
+      build()
+    try {
+      cluster.format()
+      cluster.startup()
+      val controller = cluster.controllers().values().iterator().next()
+      controller.controller.waitForReadyBrokers(3).get()
+      TestUtils.retry(60000) {
+        val latch = controller.controller.asInstanceOf[QuorumController].pause() // method pause in class QuorumController cannot be accessed as a member of org.apache.kafka.controller.QuorumController from class KRaftClusterTest in package server
+        Thread.sleep(1001)
+        latch.countDown()
+        assertEquals(0, controller.sharedServer.controllerServerMetrics.fencedBrokerCount())
+        assertTrue(controller.quorumControllerMetrics.timedOutHeartbeats() > 0, // value timedOutHeartbeats is not a member of org.apache.kafka.controller.metrics.QuorumControllerMetrics
+          "Expected timedOutHeartbeats to be greater than 0.");
       }
     } finally {
       cluster.close()

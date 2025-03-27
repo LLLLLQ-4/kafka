@@ -2368,6 +2368,31 @@ public class ReplicationControlManagerTest {
     }
 
     @Test
+    public void testProcessExpiredBrokerHeartbeat() throws Exception {
+        MockTime mockTime = new MockTime(0, 0, 0);
+        ReplicationControlTestContext ctx = new ReplicationControlTestContext.Builder(). // cannot find symbol: class Builder
+                setMockTime(mockTime).
+                build();
+        ctx.registerBrokers(0, 1, 2);
+        ctx.unfenceBrokers(0, 1, 2);
+
+        BrokerHeartbeatRequestData heartbeatRequest = new BrokerHeartbeatRequestData().
+                setBrokerId(0).
+                setBrokerEpoch(100).
+                setCurrentMetadataOffset(123).
+                setWantShutDown(false);
+        mockTime.sleep(100);
+        ctx.replicationControl.processExpiredBrokerHeartbeat(heartbeatRequest);  // // cannot find symbol: method processExpiredBrokerHeartbeat(BrokerHeartbeatRequestData)
+        Optional<BrokerHeartbeatState> state = // cannot find symbol class: BrokerHeartbeatState
+            ctx.clusterControl.heartbeatManager().brokers().stream().
+                filter(broker -> broker.id() == 0).findFirst();
+        assertTrue(state.isPresent());
+        assertEquals(0, state.get().id());
+        assertEquals(100000000L, state.get().lastContactNs);
+        assertEquals(123, state.get().metadataOffset);
+    }
+
+    @Test
     public void testReassignPartitionsHandlesNewReassignmentThatRemovesPreviouslyAddingReplicas() throws Exception {
         ReplicationControlTestContext ctx = new ReplicationControlTestContext();
         ReplicationControlManager replication = ctx.replicationControl;
