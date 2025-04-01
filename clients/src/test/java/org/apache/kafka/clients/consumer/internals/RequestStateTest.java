@@ -16,11 +16,11 @@
  */
 package org.apache.kafka.clients.consumer.internals;
 
-import org.apache.kafka.common.utils.LogContext;
-import org.junit.jupiter.api.Test;
-
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import org.apache.kafka.common.utils.LogContext;
+import org.junit.jupiter.api.Test;
 
 public class RequestStateTest {
     @Test
@@ -47,5 +47,27 @@ public class RequestStateTest {
         // test reset
         state.reset();
         assertTrue(state.canSendRequest(200));
+    }
+
+    @Test
+    public void testTrackInflightOnFailedAttempt() {
+        RequestState state = new RequestState(
+                new LogContext(),
+                this.getClass().getSimpleName(),
+                100,
+                2,
+                1000,
+                0);
+
+        assertTrue(state.canSendRequest(0));
+
+        state.onSendAttempt(202);
+        assertFalse(state.canSendRequest(202));
+
+        state.onFailedAttempt(236);
+        assertTrue(state.canSendRequest(236));
+
+        state.onSendAttempt(236);
+        assertFalse(state.canSendRequest(236));
     }
 }
