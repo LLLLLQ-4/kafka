@@ -272,7 +272,7 @@ public class NetworkClientTest {
             client.poll(1, time.milliseconds());
         selector.clear();
     }
-    
+
     @Test
     public void testConnectionTimeoutAfterThrottling() {
         awaitReady(client, node);
@@ -303,6 +303,50 @@ public class NetworkClientTest {
 
         assertEquals(1, client.inFlightRequestCount(node.idString()));
         assertFalse(client.connectionFailed(node), "Connection should not have failed due to the extra time spent throttling.");
+    }
+    @Test  
+    public void testNodeWithMixedThrottleAndTimeoutRequests() {  
+
+        // NetworkClient client = this.clientWithNoVersionDiscovery;  
+        awaitReady(client, node);  
+        // assertTrue(client.isReady(node, time.milliseconds()),  
+        //     "Expected NetworkClient to be ready to send to node " + node.idString());  
+        short requestVersion = PRODUCE.latestVersion();
+        // MetadataRequest.Builder builder = new MetadataRequest.Builder(Collections.emptyList(), true);  
+        ProduceRequest.Builder builder = new ProduceRequest.Builder(
+            requestVersion,
+            requestVersion,
+            new ProduceRequestData()
+            .setAcks((short) 1)
+            .setTimeoutMs(1000));
+        TestCallbackHandler handler = new TestCallbackHandler();
+        // final List<ClientResponse> callbackResponses = new ArrayList<>();  
+        // RequestCompletionHandler callback = callbackResponses::add;  
+
+        // Send first request with a shorter timeout  
+        ClientRequest request1 = client.newClientRequest(node.idString(), builder, time.milliseconds(), true, defaultRequestTimeoutMs, handler);  
+        client.send(request1, time.milliseconds());  
+        client.poll(1, time.milliseconds()); 
+        
+        int throttleTime = 200;  
+
+        ProduceResponse produceResponse1 = new ProduceResponse(new ProduceResponseData().setThrottleTimeMs(throttleTime));
+        ByteBuffer buffer = RequestTestUtils.serializeResponseWithHeader(produceResponse1, requestVersion, request1.correlationId());
+        selector.completeReceive(new NetworkReceive(node.idString(), buffer));  
+        
+        ClientRequest request2 = client.newClientRequest(node.idString(), builder, time.milliseconds(), true, throttleTime / 2, handler);  
+        client.send(request2, time.milliseconds());  
+        // 让request2超时
+        time.sleep(throttleTime / 2); 
+        client.poll(1, time.milliseconds());  
+        assertFalse(client.ready(node, time.milliseconds()));
+        assertEquals(throttleTime, client.throttleDelayMs(node, time.milliseconds()));
+        time.sleep(throttleTime);
+        assertTrue(client.ready(node, time.milliseconds()));
+
+        // // 超时的request2应该等待throttle结束，即不会导致连接关闭
+        // assertFalse(client.connectionFailed(node));
+
     }
 
     @Test
