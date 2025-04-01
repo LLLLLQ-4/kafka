@@ -16,84 +16,28 @@
  */
 package org.apache.kafka.clients.consumer.internals;
 
-import org.apache.kafka.clients.ApiVersions;
-import org.apache.kafka.clients.ClientRequest;
-import org.apache.kafka.clients.CommonClientConfigs;
-import org.apache.kafka.clients.FetchSessionHandler;
-import org.apache.kafka.clients.Metadata;
-import org.apache.kafka.clients.MockClient;
-import org.apache.kafka.clients.NetworkClient;
-import org.apache.kafka.clients.NodeApiVersions;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.OffsetOutOfRangeException;
-import org.apache.kafka.clients.consumer.OffsetResetStrategy;
-import org.apache.kafka.common.Cluster;
-import org.apache.kafka.common.IsolationLevel;
-import org.apache.kafka.common.KafkaException;
-import org.apache.kafka.common.MetricName;
-import org.apache.kafka.common.MetricNameTemplate;
-import org.apache.kafka.common.Node;
-import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.TopicIdPartition;
-import org.apache.kafka.common.Uuid;
-import org.apache.kafka.common.errors.RecordTooLargeException;
-import org.apache.kafka.common.errors.SerializationException;
-import org.apache.kafka.common.errors.TopicAuthorizationException;
-import org.apache.kafka.common.header.Header;
-import org.apache.kafka.common.header.internals.RecordHeader;
-import org.apache.kafka.common.internals.ClusterResourceListeners;
-import org.apache.kafka.common.message.FetchResponseData;
-import org.apache.kafka.common.message.ApiMessageType;
-import org.apache.kafka.common.message.OffsetForLeaderEpochResponseData;
-import org.apache.kafka.common.message.OffsetForLeaderEpochResponseData.EpochEndOffset;
-import org.apache.kafka.common.message.OffsetForLeaderEpochResponseData.OffsetForLeaderTopicResult;
-import org.apache.kafka.common.metrics.KafkaMetric;
-import org.apache.kafka.common.metrics.MetricConfig;
-import org.apache.kafka.common.metrics.Metrics;
-import org.apache.kafka.common.network.NetworkReceive;
-import org.apache.kafka.common.protocol.ApiKeys;
-import org.apache.kafka.common.protocol.Errors;
-import org.apache.kafka.common.requests.FetchMetadata;
-import org.apache.kafka.common.requests.FetchRequest.PartitionData;
-import org.apache.kafka.common.utils.BufferSupplier;
-import org.apache.kafka.common.record.CompressionType;
-import org.apache.kafka.common.record.ControlRecordType;
-import org.apache.kafka.common.record.DefaultRecordBatch;
-import org.apache.kafka.common.record.EndTransactionMarker;
-import org.apache.kafka.common.record.LegacyRecord;
-import org.apache.kafka.common.record.MemoryRecords;
-import org.apache.kafka.common.record.MemoryRecordsBuilder;
-import org.apache.kafka.common.record.Record;
-import org.apache.kafka.common.record.RecordBatch;
-import org.apache.kafka.common.record.Records;
-import org.apache.kafka.common.record.SimpleRecord;
-import org.apache.kafka.common.record.TimestampType;
-import org.apache.kafka.common.requests.ApiVersionsResponse;
-import org.apache.kafka.common.requests.FetchRequest;
-import org.apache.kafka.common.requests.FetchResponse;
-import org.apache.kafka.common.requests.MetadataResponse;
-import org.apache.kafka.common.requests.OffsetsForLeaderEpochResponse;
-import org.apache.kafka.common.requests.RequestTestUtils;
-import org.apache.kafka.common.serialization.ByteArrayDeserializer;
-import org.apache.kafka.common.serialization.BytesDeserializer;
-import org.apache.kafka.common.serialization.Deserializer;
-import org.apache.kafka.common.serialization.StringDeserializer;
-import org.apache.kafka.common.utils.ByteBufferOutputStream;
-import org.apache.kafka.common.utils.LogContext;
-import org.apache.kafka.common.utils.MockTime;
-import org.apache.kafka.common.utils.Timer;
-import org.apache.kafka.common.utils.Utils;
-import org.apache.kafka.test.DelayedReceive;
-import org.apache.kafka.test.MockSelector;
-import org.apache.kafka.test.TestUtils;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.MethodSource;
-import org.junit.jupiter.params.provider.EnumSource;
-import org.mockito.ArgumentCaptor;
+import static java.util.Collections.emptyList;
+import static java.util.Collections.emptyMap;
+import static java.util.Collections.emptySet;
+import static java.util.Collections.singleton;
+import static java.util.Collections.singletonList;
+import static java.util.Collections.singletonMap;
+import static org.apache.kafka.common.requests.FetchMetadata.INVALID_SESSION_ID;
+import static org.apache.kafka.common.utils.Utils.mkSet;
+import static org.apache.kafka.test.TestUtils.assertOptional;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import java.io.DataOutputStream;
 import java.lang.reflect.Field;
@@ -121,28 +65,84 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static java.util.Collections.emptyList;
-import static java.util.Collections.emptyMap;
-import static java.util.Collections.emptySet;
-import static java.util.Collections.singleton;
-import static java.util.Collections.singletonList;
-import static java.util.Collections.singletonMap;
-import static org.apache.kafka.common.requests.FetchMetadata.INVALID_SESSION_ID;
-import static org.apache.kafka.common.utils.Utils.mkSet;
-import static org.apache.kafka.test.TestUtils.assertOptional;
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
+import org.apache.kafka.clients.ApiVersions;
+import org.apache.kafka.clients.ClientRequest;
+import org.apache.kafka.clients.CommonClientConfigs;
+import org.apache.kafka.clients.FetchSessionHandler;
+import org.apache.kafka.clients.Metadata;
+import org.apache.kafka.clients.MockClient;
+import org.apache.kafka.clients.NetworkClient;
+import org.apache.kafka.clients.NodeApiVersions;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.OffsetOutOfRangeException;
+import org.apache.kafka.clients.consumer.OffsetResetStrategy;
+import org.apache.kafka.common.Cluster;
+import org.apache.kafka.common.IsolationLevel;
+import org.apache.kafka.common.KafkaException;
+import org.apache.kafka.common.MetricName;
+import org.apache.kafka.common.MetricNameTemplate;
+import org.apache.kafka.common.Node;
+import org.apache.kafka.common.TopicIdPartition;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.errors.RecordTooLargeException;
+import org.apache.kafka.common.errors.SerializationException;
+import org.apache.kafka.common.errors.TopicAuthorizationException;
+import org.apache.kafka.common.header.Header;
+import org.apache.kafka.common.header.internals.RecordHeader;
+import org.apache.kafka.common.internals.ClusterResourceListeners;
+import org.apache.kafka.common.message.ApiMessageType;
+import org.apache.kafka.common.message.FetchResponseData;
+import org.apache.kafka.common.message.OffsetForLeaderEpochResponseData;
+import org.apache.kafka.common.message.OffsetForLeaderEpochResponseData.EpochEndOffset;
+import org.apache.kafka.common.message.OffsetForLeaderEpochResponseData.OffsetForLeaderTopicResult;
+import org.apache.kafka.common.metrics.KafkaMetric;
+import org.apache.kafka.common.metrics.MetricConfig;
+import org.apache.kafka.common.metrics.Metrics;
+import org.apache.kafka.common.network.NetworkReceive;
+import org.apache.kafka.common.protocol.ApiKeys;
+import org.apache.kafka.common.protocol.Errors;
+import org.apache.kafka.common.record.CompressionType;
+import org.apache.kafka.common.record.ControlRecordType;
+import org.apache.kafka.common.record.DefaultRecordBatch;
+import org.apache.kafka.common.record.EndTransactionMarker;
+import org.apache.kafka.common.record.LegacyRecord;
+import org.apache.kafka.common.record.MemoryRecords;
+import org.apache.kafka.common.record.MemoryRecordsBuilder;
+import org.apache.kafka.common.record.Record;
+import org.apache.kafka.common.record.RecordBatch;
+import org.apache.kafka.common.record.Records;
+import org.apache.kafka.common.record.SimpleRecord;
+import org.apache.kafka.common.record.TimestampType;
+import org.apache.kafka.common.requests.ApiVersionsResponse;
+import org.apache.kafka.common.requests.FetchMetadata;
+import org.apache.kafka.common.requests.FetchRequest;
+import org.apache.kafka.common.requests.FetchRequest.PartitionData;
+import org.apache.kafka.common.requests.FetchResponse;
+import org.apache.kafka.common.requests.MetadataResponse;
+import org.apache.kafka.common.requests.OffsetsForLeaderEpochResponse;
+import org.apache.kafka.common.requests.RequestTestUtils;
+import org.apache.kafka.common.serialization.ByteArrayDeserializer;
+import org.apache.kafka.common.serialization.BytesDeserializer;
+import org.apache.kafka.common.serialization.Deserializer;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.common.utils.BufferSupplier;
+import org.apache.kafka.common.utils.ByteBufferOutputStream;
+import org.apache.kafka.common.utils.LogContext;
+import org.apache.kafka.common.utils.MockTime;
+import org.apache.kafka.common.utils.Timer;
+import org.apache.kafka.common.utils.Utils;
+import org.apache.kafka.test.DelayedReceive;
+import org.apache.kafka.test.MockSelector;
+import org.apache.kafka.test.TestUtils;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.mockito.ArgumentCaptor;
 
 public class FetcherTest {
     private static final double EPSILON = 0.0001;
@@ -192,6 +192,7 @@ public class FetcherTest {
     private MemoryRecords emptyRecords;
     private MemoryRecords partialRecords;
     private ExecutorService executorService;
+    private MemoryRecords moreRecords;
 
     @BeforeEach
     public void setup() {
@@ -199,7 +200,76 @@ public class FetcherTest {
         nextRecords = buildRecords(4L, 2, 4);
         emptyRecords = buildRecords(0L, 0, 0);
         partialRecords = buildRecords(4L, 1, 0);
+        moreRecords = buildRecords(6L, 3, 6);
         partialRecords.buffer().putInt(Records.SIZE_OFFSET, 10000);
+    }
+
+    @Test
+    public void testFetchMaxPollRecordsUnaligned() {
+        final int maxPollRecords = 2;
+        buildFetcher(maxPollRecords);
+
+        Set<TopicPartition> tps = new HashSet<>();
+        tps.add(tp0);
+        tps.add(tp1);
+        assignFromUser(tps);
+        subscriptions.seek(tp0, 1);
+        subscriptions.seek(tp1, 6);
+
+        client.prepareResponse(fetchResponse2(tidp0, records, 100L, tidp1, moreRecords, 100L));
+        client.prepareResponse(fullFetchResponse(tidp0, emptyRecords, Errors.NONE, 100L, 0));
+
+        // Send fetch request because we do not have pending fetch responses to process.
+        // The first fetch response will return 3 records for tp0 and 3 more for tp1.
+        assertEquals(1, sendFetches());
+        // The poll returns 2 records from one of the topic-partitions (non-deterministic).
+        // This leaves 1 record pending from that topic-partition, and the remaining 3 from the other.
+        pollAndValidateMaxPollRecordsNotExceeded(maxPollRecords);
+
+        // See if we need to send another fetch, which we do not because we have records in hand.
+        assertEquals(0, sendFetches());
+        // The poll returns 2 more records, 1 from the topic-partition we've already been
+        // processing, and 1 more from the other topic-partition. This means we have processed
+        // all records from the former, and 2 remain from the latter.
+        pollAndValidateMaxPollRecordsNotExceeded(maxPollRecords);
+
+        // See if we need to send another fetch, which we do because we've processed all of the records
+        // from one of the topic-partitions. The fetch response does not contain any more records.
+        assertEquals(1, sendFetches());
+        // The poll returns the final 2 records.
+        pollAndValidateMaxPollRecordsNotExceeded(maxPollRecords);
+    }
+
+    private FetchResponse fetchResponse2(TopicIdPartition tp1, MemoryRecords records1, long hw1,
+                                         TopicIdPartition tp2, MemoryRecords records2, long hw2) {
+        Map<TopicIdPartition, FetchResponseData.PartitionData> partitions = new HashMap<>();
+        partitions.put(tp1,
+                new FetchResponseData.PartitionData()
+                        .setPartitionIndex(tp1.topicPartition().partition())
+                        .setErrorCode(Errors.NONE.code())
+                        .setHighWatermark(hw1)
+                        .setLastStableOffset(FetchResponse.INVALID_LAST_STABLE_OFFSET)
+                        .setLogStartOffset(0)
+                        .setRecords(records1));
+        partitions.put(tp2,
+                new FetchResponseData.PartitionData()
+                        .setPartitionIndex(tp2.topicPartition().partition())
+                        .setErrorCode(Errors.NONE.code())
+                        .setHighWatermark(hw2)
+                        .setLastStableOffset(FetchResponse.INVALID_LAST_STABLE_OFFSET)
+                        .setLogStartOffset(0)
+                        .setRecords(records2));
+        return FetchResponse.of(Errors.NONE, 0, INVALID_SESSION_ID, new LinkedHashMap<>(partitions));
+    }
+    
+    private void pollAndValidateMaxPollRecordsNotExceeded(int maxPollRecords) {
+        consumerClient.poll(time.timer(0));
+        Map<TopicPartition, List<ConsumerRecord<byte[], byte[]>>> recordsByPartition = fetchRecords();
+        int fetchedRecords = 0;
+        for (List<ConsumerRecord<byte[], byte[]>> recordsToTest : recordsByPartition.values()) {
+            fetchedRecords += recordsToTest.size();
+        }
+        assertEquals(maxPollRecords, fetchedRecords);
     }
 
     private void assignFromUser(Set<TopicPartition> partitions) {
