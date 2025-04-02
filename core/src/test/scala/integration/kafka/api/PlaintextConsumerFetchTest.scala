@@ -56,6 +56,19 @@ class PlaintextConsumerFetchTest extends AbstractConsumerTest {
     assertEquals(1, outOfRangePartitions.size)
     assertEquals(outOfRangePos.toLong, outOfRangePartitions.get(tp))
   }
+  @ParameterizedTest(name = TestInfoUtils.TestWithParameterizedQuorumAndGroupProtocolNames)
+  @MethodSource(Array("getTestQuorumAndGroupProtocolParametersAll"))
+  def testNoOffsetForPartitionExceptionOnPollZero(quorum: String, groupProtocol: String): Unit = {
+    this.consumerConfig.setProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none")
+    val consumer = createConsumer(configOverrides = this.consumerConfig)
+
+    val totalRecords = 2
+    val producer = createProducer()
+    sendRecords(producer, totalRecords, tp)
+    consumer.assign(List(tp).asJava)
+    assertThrows(classOf[NoOffsetForPartitionException], () => consumer.poll(Duration.ZERO))
+
+  }
 
   @ParameterizedTest(name = TestInfoUtils.TestWithParameterizedQuorumAndGroupProtocolNames)
   @MethodSource(Array("getTestQuorumAndGroupProtocolParametersAll"))
