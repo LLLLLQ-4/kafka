@@ -242,6 +242,48 @@ class PlaintextConsumerTest extends BaseConsumerTest {
 
   @ParameterizedTest(name = TestInfoUtils.TestWithParameterizedQuorumAndGroupProtocolNames)
   @MethodSource(Array("getTestQuorumAndGroupProtocolParametersAll"))
+  def testMaxPollIntervalMsDelayInRevocationFix(quorum: String, groupProtocol: String): Unit = {
+    println("patched: quorum: %s groupProtocol: %s", quorum, groupProtocol)
+    this.consumerConfig.setProperty(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, 5000.toString)
+    this.consumerConfig.setProperty(ConsumerConfig.HEARTBEAT_INTERVAL_MS_CONFIG, 500.toString)
+    this.consumerConfig.setProperty(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 1000.toString)
+    this.consumerConfig.setProperty(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false.toString)
+
+    val consumer = createConsumer()
+    var commitCompleted = false
+    var committedPosition: Long = -1
+
+    val listener = new TestConsumerReassignmentListener {
+      override def onPartitionsLost(partitions: util.Collection[TopicPartition]): Unit = {}
+      override def onPartitionsRevoked(partitions: util.Collection[TopicPartition]): Unit = {
+        if (!partitions.isEmpty && partitions.contains(tp)) {
+          // on the second rebalance (after we have joined the group initially), sleep longer
+          // than session timeout and then try a commit. We should still be in the group,
+          // so the commit should succeed
+          Utils.sleep(1500)
+          committedPosition = consumer.position(tp)
+          consumer.commitSync(Map(tp -> new OffsetAndMetadata(committedPosition)).asJava)
+          commitCompleted = true
+        }
+        super.onPartitionsRevoked(partitions)
+      }
+    }
+
+    consumer.subscribe(List(topic).asJava, listener)
+
+    // rebalance to get the initial assignment
+    awaitRebalance(consumer, listener)
+
+    // force a rebalance to trigger an invocation of the revocation callback while in the group
+    consumer.subscribe(List("otherTopic").asJava, listener)
+    awaitRebalance(consumer, listener)
+
+    assertEquals(0, committedPosition)
+    assertTrue(commitCompleted)
+  }
+
+  @ParameterizedTest(name = TestInfoUtils.TestWithParameterizedQuorumAndGroupProtocolNames)
+  @MethodSource(Array("getTestQuorumAndGroupProtocolParametersAll"))
   def testMaxPollIntervalMsDelayInAssignment(quorum: String, groupProtocol: String): Unit = {
     this.consumerConfig.setProperty(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, 5000.toString)
     this.consumerConfig.setProperty(ConsumerConfig.HEARTBEAT_INTERVAL_MS_CONFIG, 500.toString)
